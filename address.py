@@ -31,7 +31,10 @@ import sys
 import psycopg2 #PostgreSQLとのパイプ
 import requests #APIを取得する
 import xml.etree.cElementTree as ET #xmlの中身を取り出したりする
-import sqlite3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def db_connection():
     try:
@@ -39,7 +42,7 @@ def db_connection():
             host="localhost",
             dbname="Database",
             user="postgres",
-            password="8732Hanabatake:"
+            password=os.getenv("DB_PASSWORD")
         )
         print("成功")
         return conn
@@ -58,10 +61,12 @@ def fetch_address_xml(zip_code): #APIからxmlデータを取得する
         print(f"API取得失敗{e}")
 
 def parse_address_xml(zip_code,xml_content): #取得したxmlの解析
-    root=ET.fromstring(xml_content)
-
+    root=ET.fromstring(xml_content) #中身を探す
+    values=root.findall('.//value')
+    if not values:
+        return None
     data={"郵便番号":zip_code}
-    for val in root.findall('.//value'): #valueタグ内でループ
+    for val in root.findall('.//value'): #属性を取り出す
         data.update(val.attrib)
     return{
         "郵便番号":zip_code,
@@ -76,7 +81,7 @@ def parse_address_xml(zip_code,xml_content): #取得したxmlの解析
     }
 
 
-def save_to_db(conn,data): #解析したxmlをpostgresqlに反映
+def save_to_db(conn,data): #解析したxmlをpostgresqlに反映#郵便番号が重複した場合は更新する
     sql="""insert into dev.postal_addresses(
         "郵便番号","都道府県","都道府県カナ","市区町村","市区町村カナ",
         "住所","住所カナ","事業所名","事業所名カナ")
@@ -113,28 +118,39 @@ def display_stored_address(conn):
         print(f"失敗{e}")
 
 def main():
-    print("="*30)
-    print("郵便番号を登録してください")
-    zip_code=input("郵便番号>")
-    if not zip_code.isdigit() or len(zip_code)!=7: #半角7桁の番号が入力されなかった場合
-        print("【エラー】半角数字7桁で入力してください")
-        return #終了
-    
-    xml_content=fetch_address_xml(zip_code)
-    if xml_content is None: #エラーした場合
-        print("データの取得に失敗いたしました")
+    if len(sys.argv)<2: #リスト内にいくつの要素があるか数える
+        print("="*30)
+        print("エラー：郵便番号を入力してください")
+        print("="*30)
         return
-    address_data=parse_address_xml(zip_code,xml_content)
+    
+    zip_code=sys.argv[1] #リストの1番目に入ってる郵便番号をzip_codeに入れる
+    if not zip_code.isdigit() or len(zip_code)!=7: #数字あるいは7桁でない場合はエラー
+        print("="*30)
+        print("エラー:郵便番号は7桁の数字で入力してください")
+        print("="*30)
+        return
+        
+    xml_content=fetch_address_xml(zip_code)#APIからxmlを取得
+    if xml_content is None:
+        print("="*30)
+        print(f"エラー:郵便番号{zip_code}に対応する住所は見つかりませんでした")
+        print("="*30)
+        return
+    
+    address_data=parse_address_xml(zip_code,xml_content) #xmlを解析する
     if address_data is None:
-        print("郵便番号がみつかりませんでした")
+        print("="*30)
+        print(f"エラー:郵便番号{zip_code}に対応する住所は見つかりませんでした")
+        print("="*30)
         return
     
-    conn=db_connection() #成功した場合の接続を作成
+    conn=db_connection() #DBに接続
     if conn:
         save_to_db(conn,address_data)
-        display_stored_address(conn)
         conn.close()
-        print(f"郵便番号{zip_code}をdev.postal_addressesに登録します")
+        print(f"郵便番号{zip_code}をデータベースに保存しました")
+        
 
 if __name__=="__main__":
     main()
